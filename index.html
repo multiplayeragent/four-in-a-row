@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Four in a Row</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #151a35; }
+  body { font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #f2f4ff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; cursor: pointer; }
+  .hud { position: fixed; pointer-events: none; }
+  #seats { top: max(12px, env(safe-area-inset-top)); left: 0; right: 0; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 0 12px; }
+  .chip { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 200px; padding: 5px 12px 5px 5px; border-radius: 999px;
+          background: #0b0f26c4; font-weight: 650; white-space: nowrap; transition: box-shadow .25s; }
+  .chip.turn { box-shadow: 0 0 0 2px var(--d), 0 0 20px var(--d); }
+  .chip .disc { width: 30px; height: 30px; border-radius: 50%; flex: none; background: var(--d); box-shadow: inset 0 -4px 0 #0004, 0 0 0 3px var(--p); }
+  .chip .nm { overflow: hidden; text-overflow: ellipsis; }
+  .chip .tag { font-size: 12px; font-weight: 600; opacity: .65; }
+  .chip .pts { margin-left: auto; font-size: 17px; font-weight: 800; padding-left: 4px; }
+  .vs { font-size: 12px; font-weight: 800; opacity: .5; }
+  #status { top: calc(max(12px, env(safe-area-inset-top)) + 50px); left: 0; right: 0; text-align: center; font-weight: 800; font-size: 18px; text-shadow: 0 2px 6px #000c; padding: 0 12px; }
+  #toast { top: calc(max(12px, env(safe-area-inset-top)) + 80px); left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 999px;
+           background: #000a; font-size: 14px; transition: opacity .4s; white-space: nowrap; }
+  #watch { bottom: calc(max(6px, env(safe-area-inset-bottom)) + 20px); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; }
+  #net { bottom: max(6px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; }
+  #act { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 40px); min-width: 120px; min-height: 46px;
+         border-radius: 14px; border: 0; background: #ffc93c; color: #2a1d00; font: 800 15px system-ui, sans-serif; cursor: pointer; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #0008; }
+  #over[hidden], #act[hidden] { display: none; }
+  .card { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 18px;
+          background: #1c2350; border: 1px solid #ffffff22; text-align: center; }
+  .card h2 { margin: 0; font-size: 28px; } .card p { margin: 4px 0 10px; opacity: .85; }
+  .card h3 { margin: 6px 0 4px; font-size: 13px; color: #ffc93c; text-align: left; }
+  .card ol { text-align: left; margin: 0 0 12px; padding-left: 24px; font-size: 14px; min-height: 30px; }
+  .card li span { float: right; }
+  .card button { width: 100%; min-height: 48px; border-radius: 12px; border: 0; font: 800 16px system-ui, sans-serif; cursor: pointer; margin-top: 8px; }
+  #again { background: #ffc93c; color: #2a1d00; } #look { background: #ffffff1a; color: #fff; }
+  #next { font-size: 12px; opacity: .6; margin: 8px 0 0; }
+  .hide { display: none !important; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="seats"><div class="chip" id="chip0"></div><span class="vs">VS</span><div class="chip" id="chip1"></div></div>
+<div class="hud" id="status"></div>
+<div class="hud" id="toast" style="opacity:0"></div>
+<div class="hud" id="watch"></div>
+<div class="hud" id="net">Connecting…</div>
+<button id="act" hidden>Play again</button>
+<div id="over" hidden><div class="card">
+  <h2 id="overTitle"></h2><p id="overWhy"></p>
+  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <button id="again">Play again</button><button id="look">Look at the board</button>
+  <p id="next"></p>
+</div></div>
+<script>
+/* ═══ FOUR IN A ROW · a Multiplayer Agent starter ═════════════════════════════════════
+ * Drop discs into a 7×6 grid; the first to line up four wins. Turn-based, 2 players; anyone
+ * else watches; a bot plays when you're alone.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ grid size, the bot, timings, colors, the leaderboard
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   RULES ......... the grid, dropping a disc, finding four in a row
+ *   BOT ........... how the bot picks a column (looks a few moves ahead)
+ *   GAME (HOST) ... seats, checking and applying drops, bot turns, results, the next game.
+ *                   Only the host writes the shared `game` field.
+ *   DISCS ......... falling and bouncing discs, sparks and confetti, sounds
+ *   DRAW .......... layout, the board with its holes, ghost discs, the winning-line glow
+ *   MY MOVES ...... aiming at a column and sending a drop
+ *   HUD & RESULTS . player chips, status, results card, leaderboard
+ *   INPUT / LOOP .. pointer, touch and keys, the main loop
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code, the HOST's browser runs the rules):
+ *   - The whole game lives in ONE shared field, `game`: {id, v, cells, first, ply, last,
+ *     seats, score, at, res, lines, endsAt}. `cells` is 42 characters ("." empty, "a"/"b"
+ *     the two seats' discs, row by row from the top). `seats` = [sessionId or "bot", same].
+ *     Only the HOST writes it, and `v` goes up on every write.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. It checks every drop, plays the bot's turns, hands seats to
+ *     waiting players and starts the next game. A new host carries on from `game`.
+ *   - Each player writes its OWN entity: `n` (name), `c` (color), `hb` (heartbeat) and
+ *     `hov` (the column it is aiming at, so the other side sees the disc hover).
+ *   - Players send intents to the host: "drop" {g, ply, c} and "again" {g}. The host never
+ *     gets its own sends, so it applies its own drops directly.
+ *   - The first two players take the seats. A seat whose player is gone for 10s goes to the
+ *     bot; a waiting player takes a bot's seat, even mid-game. After a win, the loser hands
+ *     the seat to someone who is waiting (winner stays on).
+ *   - ?attract plays offline, bot against bot (the preview video is recorded from it).
+ *   - Leaderboard "wins": +1 for each game a player wins, shown on the results card.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  cols: 7, rows: 6,        // the grid
+  connect: 4,              // discs in a line to win
+  botName: "Dropbot",
+  botThinkMs: 900,         // the bot waits this long before it drops
+  botDepth: 3,             // moves the bot looks ahead (3 = its drop, your reply, its next; 5+ is hard to beat)
+  botNoise: 4,             // random wobble in its scores (a three-in-a-row is worth 5), so it isn't perfect
+  seatGraceMs: 10000,      // a seated player silent this long loses the seat to the bot
+  resultsMs: 20000,        // results show this long, then the next game starts (Play again starts it at once)
+  hintMs: 12000,           // the "tap a column" hint shows this long
+  gravity: 80,             // rows per second², how fast discs fall
+  bounce: 0.3,             // how much a disc bounces when it lands (0 = none)
+  sky: "#151a35",
+  boardColor: "#3563f0", boardDark: "#1f3fb4", backing: "#0a0e24",
+  discs: ["#ff5d6c", "#ffc93c"],     // seat 1's discs, seat 2's discs
+  discNames: ["Coral", "Gold"],
+  botColor: "#8892b0",     // the bot's ring color (not in COLORS, so no player ever matches it)
+  board: "wins",           // leaderboard name
+  attractOpening: 10,      // ?attract starts with this many discs already in, so the preview gets to a win fast
+};
+const COLORS = ["#ff6b6b", "#4dabf7", "#69db7c", "#b197fc", "#ff922b", "#f783ac", "#3bc9db", "#ffd43b"];
+const NAME_A = ["Swift", "Clever", "Bold", "Quiet", "Lucky", "Sly"], NAME_B = ["Disc", "Drop", "Stack", "Row", "Chip"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'four-in-a-row',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map(); // sessionId -> { hb, at } on OUR clock
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+/** Still in the room and heard from within the seat grace time (a backgrounded phone keeps its seat). */
+const stillHere = (id) => id === net.sessionId || (!!S.entities.players[id] && performance.now() - (seenHb.get(id)?.at ?? -1e9) < CONFIG.seatGraceMs);
+
+// ── RULES ───────────────────────────────────────────────────────────────────────────
+// cells: one character per hole, row by row from the TOP: "." empty, "a" seat 1, "b" seat 2.
+const COLS = CONFIG.cols, ROWS = CONFIG.rows, CELLS = COLS * ROWS, SIDES = "ab";
+const cellAt = (r, c) => r * COLS + c;
+const emptyGrid = () => ".".repeat(CELLS);
+/** The row a disc dropped in column c lands on, or -1 if the column is full. */
+function landingRow(cells, c) { for (let r = ROWS - 1; r >= 0; r--) if (cells[cellAt(r, c)] === ".") return r; return -1; }
+const openCols = (cells) => [...Array(COLS).keys()].filter((c) => cells[c] === ".");
+/** The grid after `side` (0 or 1) drops in column c, or null if it's full. */
+function dropDisc(cells, c, side) {
+  const r = landingRow(cells, c);
+  if (r < 0) return null;
+  const i = cellAt(r, c);
+  return cells.slice(0, i) + SIDES[side] + cells.slice(i + 1);
+}
+const LINE_DIRS = [[0, 1], [1, 0], [1, 1], [1, -1]];
+const inGrid = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS;
+/** Every line of `connect` or more same-colored discs: a list of cell lists. */
+function winLines(cells) {
+  const lines = [];
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const s = cells[cellAt(r, c)];
+    if (s === ".") continue;
+    for (const [dr, dc] of LINE_DIRS) {
+      if (inGrid(r - dr, c - dc) && cells[cellAt(r - dr, c - dc)] === s) continue; // only count a line from its first disc
+      const line = [];
+      for (let k = 0; inGrid(r + dr * k, c + dc * k) && cells[cellAt(r + dr * k, c + dc * k)] === s; k++) line.push(cellAt(r + dr * k, c + dc * k));
+      if (line.length >= CONFIG.connect) lines.push(line);
+    }
+  }
+  return lines;
+}
+/** Does the disc in cell i make a line? (fast check for the bot) */
+function winsAt(cells, i) {
+  const s = cells[i], r = Math.floor(i / COLS), c = i % COLS;
+  for (const [dr, dc] of LINE_DIRS) {
+    let n = 1;
+    for (let k = 1; inGrid(r + dr * k, c + dc * k) && cells[cellAt(r + dr * k, c + dc * k)] === s; k++) n++;
+    for (let k = 1; inGrid(r - dr * k, c - dc * k) && cells[cellAt(r - dr * k, c - dc * k)] === s; k++) n++;
+    if (n >= CONFIG.connect) return true;
+  }
+  return false;
+}
+/** Is the game over? { res: "a"|"b" (the winner's discs) or "d" (draw), lines } or null. */
+function outcome(cells) {
+  const lines = winLines(cells);
+  if (lines.length) return { res: cells[lines[0][0]], lines };
+  return cells.includes(".") ? null : { res: "d", lines: [] };
+}
+
+// ── BOT ─────────────────────────────────────────────────────────────────────────────
+const WINDOWS = []; // every run of `connect` cells, for scoring a position
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) for (const [dr, dc] of LINE_DIRS) {
+  const w = [];
+  for (let k = 0; k < CONFIG.connect && inGrid(r + dr * k, c + dc * k); k++) w.push(cellAt(r + dr * k, c + dc * k));
+  if (w.length === CONFIG.connect) WINDOWS.push(w);
+}
+const CENTER_FIRST = [...Array(COLS).keys()].sort((x, y) => Math.abs(x - (COLS - 1) / 2) - Math.abs(y - (COLS - 1) / 2));
+/** How good the grid is for `me` ("a" or "b"): open threes and twos, plus the middle column. */
+function evaluate(cells, me) {
+  let s = 0;
+  const mid = (COLS - 1) >> 1;
+  for (let r = 0; r < ROWS; r++) { const ch = cells[cellAt(r, mid)]; if (ch === me) s += 3; else if (ch !== ".") s -= 3; }
+  for (const w of WINDOWS) {
+    let mine = 0, theirs = 0;
+    for (const i of w) { const ch = cells[i]; if (ch === me) mine++; else if (ch !== ".") theirs++; }
+    if (mine && theirs) continue;
+    if (mine === CONFIG.connect - 1) s += 5; else if (mine === CONFIG.connect - 2) s += 2;
+    if (theirs === CONFIG.connect - 1) s -= 5; else if (theirs === CONFIG.connect - 2) s -= 2;
+  }
+  return s;
+}
+/** The best score `side` can force, looking `depth` drops ahead. */
+function negamax(cells, side, depth, alpha, beta, ply) {
+  if (depth <= 0) return evaluate(cells, SIDES[side]);
+  let any = false;
+  for (const c of CENTER_FIRST) {
+    const next = dropDisc(cells, c, side);
+    if (!next) continue;
+    any = true;
+    const v = winsAt(next, cellAt(landingRow(cells, c), c)) ? 100000 - ply : !next.includes(".") ? 0 : -negamax(next, 1 - side, depth - 1, -beta, -alpha, ply + 1);
+    if (v >= beta) return v;
+    if (v > alpha) alpha = v;
+  }
+  return any ? alpha : 0;
+}
+/** The column the bot drops in. It always takes a win and blocks one it can see. */
+function botMove(cells, side) {
+  let best = -1, bestScore = -Infinity;
+  for (const c of openCols(cells)) {
+    const next = dropDisc(cells, c, side);
+    const s = (winsAt(next, cellAt(landingRow(cells, c), c)) ? 100000 : -negamax(next, 1 - side, CONFIG.botDepth - 1, -Infinity, Infinity, 1)) + Math.random() * CONFIG.botNoise;
+    if (s > bestScore) { bestScore = s; best = c; }
+  }
+  return best;
+}
+
+// ── GAME (HOST) ─────────────────────────────────────────────────────────────────────
+const host = { last: null };
+const gameMemo = { raw: undefined, g: null };
+/** The game as state has it, or the host's own newer write that hasn't come back yet. */
+function game() {
+  if (gameMemo.raw !== S.shared.game) { gameMemo.raw = S.shared.game; gameMemo.g = parse(S.shared.game, null); }
+  const g = gameMemo.g;
+  return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g;
+}
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+/** Whose turn: 0 or 1 (seat 1 starts when first = 0). */
+const turnOf = (g) => (g.first + g.ply) % 2;
+function freshGame(id, seats, first, score) {
+  return { id, cells: ATTRACT ? attractOpening() : emptyGrid(), first, ply: 0, last: -1, seats, score: score || {}, at: Date.now(), res: "", lines: [], endsAt: 0 };
+}
+/** ?attract only: a few random discs so the preview gets to the exciting part. */
+function attractOpening() {
+  let cells = emptyGrid();
+  for (let i = 0; i < CONFIG.attractOpening; i++) {
+    const safe = openCols(cells).filter((c) => !winLines(dropDisc(cells, c, i % 2)).length);
+    cells = dropDisc(cells, safe[Math.floor(Math.random() * safe.length)], i % 2);
+  }
+  return cells;
+}
+
+/** Gone players lose their seat to the bot; waiting players take a bot's seat. */
+function fixSeats(g) {
+  if (ATTRACT) return g;
+  const seats = [...g.seats], waiting = livePlayers().filter((id) => !seats.includes(id));
+  for (let s = 0; s < 2; s++) if (seats[s] !== "bot" && !stillHere(seats[s])) seats[s] = "bot";
+  for (let s = 0; s < 2; s++) if (seats[s] === "bot" && waiting.length) seats[s] = waiting.shift();
+  return seats[0] === g.seats[0] && seats[1] === g.seats[1] ? g : writeGame({ ...g, seats });
+}
+/** Drop a disc for the side to move (the column is checked) and write the result. */
+function applyDrop(g, c) {
+  const side = turnOf(g), cells = typeof c === "number" ? dropDisc(g.cells, c, side) : null;
+  if (!cells) return false; // full column or nonsense: refused
+  const out = { ...g, cells, ply: g.ply + 1, last: cellAt(landingRow(g.cells, c), c), at: Date.now() };
+  const end = outcome(cells);
+  if (end) {
+    Object.assign(out, end, { endsAt: Date.now() + CONFIG.resultsMs });
+    if (end.res !== "d") { const who = g.seats[SIDES.indexOf(end.res)]; out.score = { ...g.score, [who]: (g.score[who] || 0) + 1 }; }
+  }
+  writeGame(out);
+  return true;
+}
+/** A "drop" intent (or the host's own): only from the seat whose turn it is, on this exact ply. */
+function hostDrop(from, m) {
+  const g = game();
+  if (!g || g.res || m.g !== g.id || m.ply !== g.ply || g.seats[turnOf(g)] !== from) return;
+  applyDrop(g, m.c);
+}
+/** The next game: the other seat starts; after a win, a waiting player takes the loser's seat. */
+function nextGame(g) {
+  const seats = [...g.seats], waiting = livePlayers().filter((id) => !seats.includes(id));
+  if (!ATTRACT && (g.res === "a" || g.res === "b") && waiting.length) seats[1 - SIDES.indexOf(g.res)] = waiting[0];
+  const keep = new Set([...seats, ...livePlayers(), "bot"]), score = {};
+  for (const [id, n] of Object.entries(g.score || {})) if (keep.has(id)) score[id] = n;
+  return writeGame(freshGame(g.id + 1, seats, 1 - g.first, score));
+}
+function hostAgain(from, m) {
+  const g = game();
+  if (g && g.res && m.g === g.id && g.seats.includes(from)) nextGame(g);
+}
+function hostTick() {
+  let g = game();
+  if (!g) g = writeGame(freshGame(1, ATTRACT ? ["bot", "bot"] : [net.sessionId, "bot"], 0));
+  g = fixSeats(g);
+  if (g.res) { if (Date.now() > g.endsAt) nextGame(g); return; }
+  if (g.seats[turnOf(g)] === "bot" && Date.now() > g.at + CONFIG.botThinkMs) applyDrop(g, botMove(g.cells, turnOf(g)));
+}
+
+// ── DISCS ───────────────────────────────────────────────────────────────────────────
+// What the board shows. Discs fall in row units (row 0 = top hole, -1.2 = just above the board).
+const view = { id: -1, cells: emptyGrid(), discs: new Map(), leaving: [], glowAt: 0 };
+const parts = [];
+function syncBoard(g, now) {
+  const cells = shownCells(g);
+  let stagger = false;
+  if (view.id !== g.id) { // a new game (or we just arrived): the old discs fall out of the bottom
+    for (const d of view.discs.values()) view.leaving.push({ ...d, vy: Math.random() * 3, t0: now + (d.c * 30) });
+    view.discs.clear(); view.cells = emptyGrid(); view.glowAt = 0;
+    if (view.id >= 0 && mySeat(g) >= 0) toast(turnOf(g) === mySeat(g) ? "New game · you go first" : "New game · they go first");
+    view.id = g.id; stagger = true; closedFor = -1; pending = null;
+  }
+  if (cells === view.cells) return;
+  for (let i = 0; i < CELLS; i++) {
+    if (cells[i] === view.cells[i]) continue;
+    view.discs.delete(i);
+    if (cells[i] === ".") continue;
+    const r = Math.floor(i / COLS), c = i % COLS;
+    view.discs.set(i, { r, c, side: SIDES.indexOf(cells[i]), y: -1.2, vy: 0, t0: now + (stagger ? (ROWS - 1 - r) * 90 + c * 25 : 0), hit: false, done: false });
+  }
+  view.cells = cells;
+}
+function stepDiscs(dt, now) {
+  for (const d of view.discs.values()) {
+    if (d.done || now < d.t0) continue;
+    d.vy += CONFIG.gravity * dt; d.y += d.vy * dt;
+    if (d.y >= d.r) {
+      d.y = d.r;
+      if (!d.hit) { d.hit = true; sound("clack", d.r); landFx(d); }
+      d.vy = -d.vy * CONFIG.bounce;
+      if (Math.abs(d.vy) < 1.5) { d.vy = 0; d.done = true; }
+    }
+  }
+  for (let i = view.leaving.length - 1; i >= 0; i--) {
+    const d = view.leaving[i];
+    if (now < d.t0) continue;
+    d.vy += CONFIG.gravity * dt; d.y += d.vy * dt;
+    if (L.by + L.pad + d.y * L.cs > H + L.cs) view.leaving.splice(i, 1);
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.life -= dt; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.spin += dt * 8;
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+}
+const allLanded = () => [...view.discs.values()].every((d) => d.done);
+function landFx(d) {
+  const [x, y] = holeXY(d.r, d.c);
+  for (let i = 0; i < 6; i++) parts.push({ x: x + (Math.random() - 0.5) * L.cs * 0.6, y: y + L.cs * 0.35, vx: (Math.random() - 0.5) * 120, vy: -40 - Math.random() * 80, g: 300, life: 0.35, size: 3, color: CONFIG.discs[d.side], spin: 0 });
+}
+function confetti(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 120 + Math.random() * 320;
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 200, g: 520, life: 1 + Math.random() * 0.8, size: 4 + Math.random() * 4, color: [...CONFIG.discs, "#ffffff", "#7bdcff"][i % 4], spin: Math.random() * 6 });
+  }
+}
+let actx = null; // sounds start after the first tap or key (browsers require it)
+function unlockAudio() { if (!actx) try { actx = new AudioContext(); } catch {} }
+function sound(kind, row = 0) {
+  if (!actx || ATTRACT) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  if (kind === "clack") { o.type = "triangle"; o.frequency.setValueAtTime(260 + (ROWS - row) * 30, t); o.frequency.exponentialRampToValueAtTime(90, t + 0.09); g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12); }
+  else { o.type = "sine"; o.frequency.setValueAtTime(kind === "win" ? 520 : 300, t); o.frequency.exponentialRampToValueAtTime(kind === "win" ? 1040 : 150, t + 0.35); g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.5); }
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.55);
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const L = { cs: 40, pad: 10, bx: 0, by: 0, bw: 0, bh: 0 }; // cell size, frame padding, board rectangle
+function fit() {
+  DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR;
+  const top = ATTRACT ? 16 : 112, bottom = ATTRACT ? 36 : 64; // room kept for the HUD
+  L.cs = Math.max(20, Math.min((W - 32) / (COLS + 0.5), (H - top - bottom) / (ROWS + 1.7)));
+  L.pad = L.cs * 0.25; L.bw = L.cs * COLS + L.pad * 2; L.bh = L.cs * ROWS + L.pad * 2;
+  L.bx = (W - L.bw) / 2; L.by = top + (H - top - bottom - L.bh - L.cs * 1.2) * 0.4 + L.cs * 1.2;
+}
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const holeXY = (r, c) => [L.bx + L.pad + (c + 0.5) * L.cs, L.by + L.pad + (r + 0.5) * L.cs];
+
+function shade(hex, k) { // k > 0 lightens toward white, k < 0 darkens toward black
+  const n = parseInt(hex.slice(1), 16), t = k > 0 ? 255 : 0, a = Math.abs(k);
+  const ch = (s) => Math.round(((n >> s) & 255) * (1 - a) + t * a);
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+function drawDisc(x, y, color, alpha = 1) {
+  const r = L.cs * 0.4;
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  g.addColorStop(0, shade(color, 0.45)); g.addColorStop(0.5, color); g.addColorStop(1, shade(color, -0.3));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = shade(color, -0.22); ctx.lineWidth = r * 0.12; ctx.beginPath(); ctx.arc(x, y, r * 0.64, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+
+function draw(g, now) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const bg = ctx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.75);
+  bg.addColorStop(0, "#26306a"); bg.addColorStop(1, CONFIG.sky);
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  const { bx, by, bw, bh, cs } = L;
+  // the stand and a soft shadow under the board
+  ctx.fillStyle = "#00000055"; ctx.beginPath(); ctx.ellipse(W / 2, by + bh + cs * 0.32, bw * 0.55, cs * 0.18, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = CONFIG.boardDark;
+  for (const fx of [bx - cs * 0.12, bx + bw - cs * 0.28]) { roundRect(fx, by + bh * 0.55, cs * 0.4, bh * 0.45 + cs * 0.3, cs * 0.12); ctx.fill(); }
+  // dark backing: what you see through an empty hole
+  ctx.fillStyle = CONFIG.backing; roundRect(bx + L.pad * 0.5, by + L.pad * 0.5, bw - L.pad, bh - L.pad, cs * 0.2); ctx.fill();
+  // discs behind the face: in the board, falling in, falling out
+  for (const d of view.leaving) if (now >= d.t0) drawDisc(holeXY(0, d.c)[0], by + L.pad + (d.y + 0.5) * cs, CONFIG.discs[d.side]);
+  for (const d of view.discs.values()) if (now >= d.t0) drawDisc(holeXY(0, d.c)[0], by + L.pad + (d.y + 0.5) * cs, CONFIG.discs[d.side]);
+  // the face, with a hole for every cell
+  const face = ctx.createLinearGradient(0, by, 0, by + bh);
+  face.addColorStop(0, shade(CONFIG.boardColor, 0.12)); face.addColorStop(1, CONFIG.boardColor);
+  ctx.fillStyle = face; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, cs * 0.28);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) { const [x, y] = holeXY(r, c); ctx.moveTo(x + cs * 0.41, y); ctx.arc(x, y, cs * 0.41, 0, Math.PI * 2); }
+  ctx.fill("evenodd");
+  ctx.lineWidth = cs * 0.05;
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const [x, y] = holeXY(r, c);
+    ctx.strokeStyle = CONFIG.boardDark; ctx.beginPath(); ctx.arc(x, y, cs * 0.42, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+    ctx.strokeStyle = "#ffffff40"; ctx.beginPath(); ctx.arc(x, y, cs * 0.42, Math.PI * 0.1, Math.PI * 0.9); ctx.stroke();
+  }
+  ctx.strokeStyle = "#ffffff30"; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(bx + 1, by + 1, bw - 2, bh - 2, cs * 0.28); ctx.stroke();
+  if (g) { drawAim(g, now); drawWin(g, now); }
+  for (const p of parts) {
+    ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.color;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.spin); ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+/** The disc hovering above the board: mine while I aim, the other player's, or the bot "thinking". */
+const ghost = { x: 3, side: -1 };
+function drawAim(g, now) {
+  if (g.res || pending) return;
+  const side = turnOf(g), who = g.seats[side];
+  let col = -1;
+  if (who === net.sessionId) col = aim.col;
+  else if (who === "bot") col = (COLS - 1) / 2 + Math.sin(now / 420) * 1.6 + Math.sin(now / 170) * 0.5; // looking around
+  else { const h = Number(S.entities.players[who]?.hov); col = Number.isFinite(h) ? h : -1; }
+  if (col < 0) { ghost.side = -1; return; }
+  if (ghost.side !== side) { ghost.x = col; ghost.side = side; }
+  ghost.x += (col - ghost.x) * 0.3;
+  const x = L.bx + L.pad + (ghost.x + 0.5) * L.cs, y = L.by - L.cs * 0.55 + Math.sin(now / 260) * 2;
+  if (who === net.sessionId) { // light up the column and the hole it would land in
+    const c = Math.round(col), r = landingRow(shownCells(g), c);
+    ctx.fillStyle = "#ffffff14"; ctx.fillRect(L.bx + L.pad + c * L.cs, L.by + L.pad * 0.5, L.cs, L.bh - L.pad);
+    if (r >= 0) { const [hx, hy] = holeXY(r, c); ctx.strokeStyle = CONFIG.discs[side]; ctx.globalAlpha = 0.6 + Math.sin(now / 150) * 0.3; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(hx, hy, L.cs * 0.33, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
+  }
+  drawDisc(x, y, CONFIG.discs[side], who === net.sessionId ? 1 : 0.85);
+}
+/** The winning line: glowing rings and a bright stroke through the discs, once they have landed. */
+function drawWin(g, now) {
+  if (!g.lines || !g.lines.length || !allLanded()) return;
+  if (!view.glowAt) { view.glowAt = now; sound("win"); for (const line of g.lines) for (const i of line) confetti(...holeXY(Math.floor(i / COLS), i % COLS), 14); }
+  const k = Math.min(1, (now - view.glowAt) / 350), pulse = 0.65 + Math.sin(now / 140) * 0.35;
+  ctx.save(); ctx.shadowColor = "#fff"; ctx.shadowBlur = 24 * pulse; ctx.lineCap = "round";
+  for (const line of g.lines) {
+    for (const i of line) { const [x, y] = holeXY(Math.floor(i / COLS), i % COLS); ctx.strokeStyle = `rgba(255,255,255,${0.9 * pulse})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(x, y, L.cs * 0.43, 0, Math.PI * 2); ctx.stroke(); }
+    const a = holeXY(Math.floor(line[0] / COLS), line[0] % COLS), b = holeXY(Math.floor(line[line.length - 1] / COLS), line[line.length - 1] % COLS);
+    ctx.strokeStyle = "#ffffffd0"; ctx.lineWidth = L.cs * 0.14;
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ── MY MOVES ────────────────────────────────────────────────────────────────────────
+const aim = { col: -1, down: false, lastSent: -2, sentAt: 0 };
+let pending = null, hintUntil = performance.now() + CONFIG.hintMs;
+const mySeat = (g) => g.seats.indexOf(net.sessionId);
+const myTurn = (g) => !g.res && !pending && turnOf(g) === mySeat(g);
+/** What the board shows: the game in state, or my drop while it is on its way to the host. */
+function shownCells(g) {
+  if (pending && (pending.cells !== g.cells || performance.now() - pending.at > 4000)) pending = null;
+  return pending ? pending.next : g.cells;
+}
+function tryDrop(c) {
+  const g = game();
+  if (!g || !myTurn(g) || c < 0 || landingRow(g.cells, c) < 0) return;
+  const msg = { g: g.id, ply: g.ply, c };
+  hintUntil = 0;
+  if (isHost()) return hostDrop(net.sessionId, msg);
+  net.send("drop", msg);
+  pending = { cells: g.cells, next: dropDisc(g.cells, c, turnOf(g)), at: performance.now() };
+}
+/** The column under a screen point, or -1. */
+function colAt(x, y) {
+  const c = Math.floor((x - L.bx - L.pad) / L.cs);
+  if (y < L.by - L.cs * 1.6 || y > L.by + L.bh + L.cs * 0.6 || x < L.bx - L.cs * 0.3 || x > L.bx + L.bw + L.cs * 0.3) return -1;
+  return Math.max(0, Math.min(COLS - 1, c));
+}
+/** Tell the others where I'm aiming (a few times a second at most). */
+function publishAim(g, now) {
+  const want = g && myTurn(g) ? aim.col : -1;
+  if (want !== aim.lastSent && now - aim.sentAt > 90) { aim.lastSent = want; aim.sentAt = now; net.me.set("hov", want); }
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const nameOf = (id) => (id === "bot" ? CONFIG.botName : id === net.sessionId ? myName : String(S.entities.players[id]?.n || "Player"));
+const colorOf = (id) => (id === "bot" ? CONFIG.botColor : id === net.sessionId ? myColor : S.entities.players[id]?.c || "#ccc");
+let toastAt = 0, dropped = false, resultsFor = -1, closedFor = -1, cardAt = 0, board = null, seatsSeen = null;
+function toast(text) { $("toast").textContent = text; $("toast").style.opacity = 1; toastAt = performance.now(); }
+function chip(el, s, g) {
+  const id = g.seats[s], tag = id === "bot" ? "bot" : id === net.sessionId ? "you" : "";
+  el.className = "chip" + (!g.res && turnOf(g) === s ? " turn" : "");
+  el.style.setProperty("--d", CONFIG.discs[s]); el.style.setProperty("--p", colorOf(id));
+  const html = `<span class="disc"></span><span class="nm">${esc(nameOf(id))}</span><span class="tag">${tag}</span><span class="pts">${g.score?.[id] || 0}</span>`;
+  if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+}
+function hud(g) {
+  const now = performance.now(), side = mySeat(g), turnId = g.seats[turnOf(g)];
+  if (now - toastAt > 3000) $("toast").style.opacity = 0;
+  if (ATTRACT) { for (const id of ["seats", "status", "watch", "net"]) $(id).classList.add("hide"); return; }
+  chip($("chip0"), 0, g); chip($("chip1"), 1, g);
+  const prev = seatsSeen; // someone took over from the bot, or the bot took over
+  seatsSeen = { id: g.id, seats: [...g.seats] };
+  if (prev && prev.id === g.id) for (const s of [0, 1]) if (prev.seats[s] !== g.seats[s]) toast(`${g.seats[s] === net.sessionId ? "You" : nameOf(g.seats[s])} took over ${CONFIG.discNames[s].toLowerCase()}`);
+  $("status").textContent = g.res ? (g.res === "d" ? "Draw · the board is full" : `${nameOf(g.seats[SIDES.indexOf(g.res)])} wins · four in a row!`)
+    : pending ? "Dropping…"
+    : side === turnOf(g) ? "Your turn" + (now < hintUntil ? " · tap a column" : "")
+    : turnId === "bot" ? `${CONFIG.botName} is thinking…`
+    : side >= 0 ? `${nameOf(turnId)}'s turn` : `You're watching · ${nameOf(turnId)}'s turn`;
+  const watchers = livePlayers().filter((id) => !g.seats.includes(id));
+  $("watch").textContent = watchers.length ? "Watching: " + watchers.map((id) => (id === net.sessionId ? "you (you're next)" : nameOf(id))).join(", ") : "";
+  // results card, a moment after the winning disc lands
+  if (g.res && resultsFor !== g.id && allLanded()) { resultsFor = g.id; cardAt = now + (g.res === "d" ? 400 : 1300); showResults(g, side); }
+  $("over").hidden = !g.res || resultsFor !== g.id || now < cardAt || closedFor === g.id;
+  $("act").hidden = !g.res || side < 0 || closedFor !== g.id;
+  if (g.res) $("next").textContent = `Next game in ${Math.max(0, Math.ceil((g.endsAt - Date.now()) / 1000))}s`;
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the game" : ""}`;
+}
+function showResults(g, side) {
+  const winSide = SIDES.indexOf(g.res), won = side >= 0 && winSide === side;
+  $("overTitle").textContent = g.res === "d" ? "Draw" : won ? "You win!" : side >= 0 ? "You lose" : `${nameOf(g.seats[winSide])} wins`;
+  $("overWhy").textContent = (g.res === "d" ? "The board is full." : "Four in a row.") + ` ${nameOf(g.seats[0])} ${g.score?.[g.seats[0]] || 0} · ${g.score?.[g.seats[1]] || 0} ${nameOf(g.seats[1])}`;
+  $("again").classList.toggle("hide", side < 0);
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+function playAgain() { const g = game(); if (!g || !g.res) return; const msg = { g: g.id }; if (isHost()) hostAgain(net.sessionId, msg); else net.send("again", msg); }
+$("again").onclick = playAgain;
+$("act").onclick = playAgain;
+$("look").onclick = () => { closedFor = game()?.id ?? -1; };
+
+// ── INPUT / LOOP ────────────────────────────────────────────────────────────────────
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); aim.down = true; aim.col = colAt(e.clientX, e.clientY); });
+cv.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || aim.down) aim.col = colAt(e.clientX, e.clientY); });
+addEventListener("pointerup", (e) => {
+  if (!aim.down) return;
+  aim.down = false;
+  const c = colAt(e.clientX, e.clientY);
+  if (c >= 0) tryDrop(c);
+  if (e.pointerType !== "mouse") aim.col = -1;
+});
+addEventListener("pointercancel", () => { aim.down = false; aim.col = -1; });
+cv.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") aim.col = -1; });
+addEventListener("keydown", (e) => {
+  unlockAudio();
+  if (e.key >= "1" && e.key <= String(COLS)) return tryDrop(+e.key - 1);
+  if (e.key === "ArrowLeft" || e.key === "a") aim.col = Math.max(0, (aim.col < 0 ? 3 : aim.col) - 1);
+  if (e.key === "ArrowRight" || e.key === "d") aim.col = Math.min(COLS - 1, (aim.col < 0 ? 3 : aim.col) + 1);
+  if ((e.key === "Enter" || e.key === " " || e.key === "ArrowDown") && aim.col >= 0) tryDrop(aim.col);
+});
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+let myName = "", myColor = COLORS[0], last = performance.now(), lastHb = 0, lastHud = 0;
+try { myName = localStorage.getItem("mpa-name") || ""; } catch {}
+const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
+if (!myName) { myName = pickOne(NAME_A) + " " + pickOne(NAME_B); try { localStorage.setItem("mpa-name", myName); } catch {} }
+if (ATTRACT) { Object.assign(CONFIG, { botThinkMs: 480, resultsMs: 2800, botDepth: 1, botNoise: 3 }); $("net").textContent = ""; } // quick, careless bots: a win every few seconds
+/** Two people joined at once with one color: the one with the higher sessionId picks a free one. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId);
+  if (!others.some(([id, p]) => p.c === myColor && id < net.sessionId) && myColor !== CONFIG.botColor) return;
+  const taken = new Set([...others.map(([, p]) => p.c), CONFIG.botColor]), free = COLORS.find((c) => !taken.has(c));
+  if (free) { myColor = free; net.me.set("c", free); }
+}
+
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be stamped before `last`
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick();
+  const g = game();
+  if (g) {
+    syncBoard(g, now);
+    publishAim(g, now);
+    if (now - lastHud > 100) { lastHud = now; hud(g); }
+  }
+  stepDiscs(dt, now);
+  draw(g, now);
+  requestAnimationFrame(frame);
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("drop", (m, from) => { if (isHost() && m) hostDrop(from, m); });
+  net.on("again", (m, from) => { if (isHost() && m) hostAgain(from, m); });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const takenColors = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  myColor = COLORS.find((c) => !takenColors.has(c)) || pickOne(COLORS);
+  net.me.set({ n: myName, c: myColor, hb: Date.now(), hov: -1 });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
