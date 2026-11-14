@@ -6,7 +6,7 @@ Drop discs, block your friend, line up four. A multiplayer starter game from [Mu
 
 ## How it plays
 
-Take turns dropping a disc into one of seven columns; the first to get four in a line across, down or diagonally wins. The first two players take the seats; anyone else watches and takes the loser's seat next game. Alone? A bot plays the other side, and a friend who joins takes over from it.
+Take turns dropping a disc into one of seven columns; the first to get four in a line across, down or diagonally wins. The first two players take the seats; anyone else watches and takes the loser's seat next game. Alone? A bot plays the other side, and a friend who joins takes over from it. Two players get 45 seconds a drop, then one is made for them.
 
 **Controls:** Click or tap a column (or press 1–7) to drop a disc.
 

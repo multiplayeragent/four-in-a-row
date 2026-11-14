@@ -20,7 +20,7 @@
   .vs { font-size: 12px; font-weight: 800; opacity: .5; }
   #status { top: calc(max(12px, env(safe-area-inset-top)) + 50px); left: 0; right: 0; text-align: center; font-weight: 800; font-size: 18px; text-shadow: 0 2px 6px #000c; padding: 0 12px; }
   #toast { top: calc(max(12px, env(safe-area-inset-top)) + 80px); left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 999px;
-           background: #000a; font-size: 14px; transition: opacity .4s; white-space: nowrap; }
+           background: #000a; font-size: 14px; transition: opacity .4s; width: max-content; max-width: calc(100vw - 56px); text-align: center; }
   #watch { bottom: calc(max(6px, env(safe-area-inset-bottom)) + 20px); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; }
   #net { bottom: max(6px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; }
   #act { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 40px); min-width: 120px; min-height: 46px;
@@ -33,6 +33,7 @@
   .card h3 { margin: 6px 0 4px; font-size: 13px; color: #ffc93c; text-align: left; }
   .card ol { text-align: left; margin: 0 0 12px; padding-left: 24px; font-size: 14px; min-height: 30px; }
   .card li span { float: right; }
+  .card li.note { list-style: none; margin-left: -24px; opacity: .7; }
   .card button { width: 100%; min-height: 48px; border-radius: 12px; border: 0; font: 800 16px system-ui, sans-serif; cursor: pointer; margin-top: 8px; }
   #again { background: #ffc93c; color: #2a1d00; } #look { background: #ffffff1a; color: #fff; }
   #next { font-size: 12px; opacity: .6; margin: 8px 0 0; }
@@ -50,7 +51,7 @@
 <button id="act" hidden>Play again</button>
 <div id="over" hidden><div class="card">
   <h2 id="overTitle"></h2><p id="overWhy"></p>
-  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most wins</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button id="again">Play again</button><button id="look">Look at the board</button>
   <p id="next"></p>
 </div></div>
@@ -64,7 +65,7 @@
  *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
  *   RULES ......... the grid, dropping a disc, finding four in a row
  *   BOT ........... how the bot picks a column (looks a few moves ahead)
- *   GAME (HOST) ... seats, checking and applying drops, bot turns, results, the next game.
+ *   GAME (HOST) ... seats, checking and applying drops, bot turns, the turn clock, results, the next game.
  *                   Only the host writes the shared `game` field.
  *   DISCS ......... falling and bouncing discs, sparks and confetti, sounds
  *   DRAW .......... layout, the board with its holes, ghost discs, the winning-line glow
@@ -100,7 +101,8 @@ const CONFIG = {
   botDepth: 3,             // moves the bot looks ahead (3 = its drop, your reply, its next; 5+ is hard to beat)
   botNoise: 4,             // random wobble in its scores (a three-in-a-row is worth 5), so it isn't perfect
   seatGraceMs: 10000,      // a seated player silent this long loses the seat to the bot
-  resultsMs: 20000,        // results show this long, then the next game starts (Play again starts it at once)
+  turnMs: 45000,           // two players: one who waits this long to drop gets a bot's drop (playing the bot, no clock)
+  resultsMs: 20000,       // results show this long, then the next game starts (Play again starts it at once)
   hintMs: 12000,           // the "tap a column" hint shows this long
   gravity: 80,             // rows per second², how fast discs fall
   bounce: 0.3,             // how much a disc bounces when it lands (0 = none)
@@ -259,7 +261,9 @@ function botMove(cells, side) {
   let best = -1, bestScore = -Infinity;
   for (const c of openCols(cells)) {
     const next = dropDisc(cells, c, side);
-    const s = (winsAt(next, cellAt(landingRow(cells, c), c)) ? 100000 : -negamax(next, 1 - side, CONFIG.botDepth - 1, -Infinity, Infinity, 1)) + Math.random() * CONFIG.botNoise;
+    let s = winsAt(next, cellAt(landingRow(cells, c), c)) ? 200000 : -negamax(next, 1 - side, CONFIG.botDepth - 1, -Infinity, Infinity, 1);
+    if (Math.abs(s) < 50000) s += Math.random() * CONFIG.botNoise; // no wobble once it sees a forced win or loss: it wins now, or holds out longest
+    if (winsAt(dropDisc(cells, c, 1 - side), cellAt(landingRow(cells, c), c))) s += 1; // a lost game still blocks the four you're about to make
     if (s > bestScore) { bestScore = s; best = c; }
   }
   return best;
@@ -335,6 +339,7 @@ function hostTick() {
   g = fixSeats(g);
   if (g.res) { if (Date.now() > g.endsAt) nextGame(g); return; }
   if (g.seats[turnOf(g)] === "bot" && Date.now() > g.at + CONFIG.botThinkMs) applyDrop(g, botMove(g.cells, turnOf(g)));
+  else if (!g.seats.includes("bot") && Date.now() > g.at + CONFIG.turnMs) applyDrop(g, botMove(g.cells, turnOf(g))); // an idle player doesn't stall the other one
 }
 
 // ── DISCS ───────────────────────────────────────────────────────────────────────────
@@ -557,11 +562,12 @@ function hud(g) {
   const prev = seatsSeen; // someone took over from the bot, or the bot took over
   seatsSeen = { id: g.id, seats: [...g.seats] };
   if (prev && prev.id === g.id) for (const s of [0, 1]) if (prev.seats[s] !== g.seats[s]) toast(`${g.seats[s] === net.sessionId ? "You" : nameOf(g.seats[s])} took over ${CONFIG.discNames[s].toLowerCase()}`);
-  $("status").textContent = g.res ? (g.res === "d" ? "Draw · the board is full" : `${nameOf(g.seats[SIDES.indexOf(g.res)])} wins · four in a row!`)
+  const left = Math.ceil((g.at + CONFIG.turnMs - Date.now()) / 1000), clock = !g.res && !g.seats.includes("bot") && left <= 10 ? ` · ${Math.max(0, left)}s` : ""; // two players: the last 10s of a turn
+  $("status").textContent = (g.res ? (g.res === "d" ? "Draw · the board is full" : `${nameOf(g.seats[SIDES.indexOf(g.res)])} wins · four in a row!`)
     : pending ? "Dropping…"
     : side === turnOf(g) ? "Your turn" + (now < hintUntil ? " · tap a column" : "")
     : turnId === "bot" ? `${CONFIG.botName} is thinking…`
-    : side >= 0 ? `${nameOf(turnId)}'s turn` : `You're watching · ${nameOf(turnId)}'s turn`;
+    : side >= 0 ? `${nameOf(turnId)}'s turn` : `You're watching · ${nameOf(turnId)}'s turn`) + clock;
   const watchers = livePlayers().filter((id) => !g.seats.includes(id));
   $("watch").textContent = watchers.length ? "Watching: " + watchers.map((id) => (id === net.sessionId ? "you (you're next)" : nameOf(id))).join(", ") : "";
   // results card, a moment after the winning disc lands
@@ -578,11 +584,11 @@ function showResults(g, side) {
   $("overWhy").textContent = (g.res === "d" ? "The board is full." : "Four in a row.") + ` ${nameOf(g.seats[0])} ${g.score?.[g.seats[0]] || 0} · ${g.score?.[g.seats[1]] || 0} ${nameOf(g.seats[1])}`;
   $("again").classList.toggle("hide", side < 0);
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = "<li class='note'>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li class='note'>Loading…</li>";
   (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li class='note'>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class='note'>Couldn't load the leaderboard.</li>"; });
 }
 function playAgain() { const g = game(); if (!g || !g.res) return; const msg = { g: g.id }; if (isHost()) hostAgain(net.sessionId, msg); else net.send("again", msg); }
 $("again").onclick = playAgain;
@@ -590,7 +596,8 @@ $("act").onclick = playAgain;
 $("look").onclick = () => { closedFor = game()?.id ?? -1; };
 
 // ── INPUT / LOOP ────────────────────────────────────────────────────────────────────
-cv.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); aim.down = true; aim.col = colAt(e.clientX, e.clientY); });
+cv.addEventListener("contextmenu", (e) => e.preventDefault()); // right-click: no browser menu, no drop
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); if (e.button > 0) return; aim.down = true; aim.col = colAt(e.clientX, e.clientY); });
 cv.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || aim.down) aim.col = colAt(e.clientX, e.clientY); });
 addEventListener("pointerup", (e) => {
   if (!aim.down) return;
@@ -603,10 +610,12 @@ addEventListener("pointercancel", () => { aim.down = false; aim.col = -1; });
 cv.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") aim.col = -1; });
 addEventListener("keydown", (e) => {
   unlockAudio();
-  if (e.key >= "1" && e.key <= String(COLS)) return tryDrop(+e.key - 1);
-  if (e.key === "ArrowLeft" || e.key === "a") aim.col = Math.max(0, (aim.col < 0 ? 3 : aim.col) - 1);
-  if (e.key === "ArrowRight" || e.key === "d") aim.col = Math.min(COLS - 1, (aim.col < 0 ? 3 : aim.col) + 1);
-  if ((e.key === "Enter" || e.key === " " || e.key === "ArrowDown") && aim.col >= 0) tryDrop(aim.col);
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key, digit = /^(Digit|Numpad)(\d)$/.exec(e.code); // by code: Shift can't turn "1" into "!", nor Caps Lock "a" into "A"
+  if (digit && !e.repeat && +digit[2] >= 1 && +digit[2] <= COLS) return tryDrop(+digit[2] - 1);
+  if (k === "ArrowLeft" || k === "a") aim.col = Math.max(0, (aim.col < 0 ? 3 : aim.col) - 1);
+  if (k === "ArrowRight" || k === "d") aim.col = Math.min(COLS - 1, (aim.col < 0 ? 3 : aim.col) + 1);
+  const g = game();
+  if ((k === "Enter" || k === " " || k === "ArrowDown") && aim.col >= 0 && g && myTurn(g)) { e.preventDefault(); if (!e.repeat) tryDrop(aim.col); } // preventDefault: a focused button doesn't press too
 });
 document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
 
