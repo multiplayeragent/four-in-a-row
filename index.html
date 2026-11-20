@@ -304,7 +304,7 @@ function fixSeats(g) {
 }
 /** Drop a disc for the side to move (the column is checked) and write the result. */
 function applyDrop(g, c) {
-  const side = turnOf(g), cells = typeof c === "number" ? dropDisc(g.cells, c, side) : null;
+  const side = turnOf(g), cells = Number.isInteger(c) && c >= 0 && c < COLS ? dropDisc(g.cells, c, side) : null; // c = -1 or 7 would wrap into the next row
   if (!cells) return false; // full column or nonsense: refused
   const out = { ...g, cells, ply: g.ply + 1, last: cellAt(landingRow(g.cells, c), c), at: Date.now() };
   const end = outcome(cells);
